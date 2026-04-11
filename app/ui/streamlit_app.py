@@ -373,6 +373,145 @@ def _build_s_shape_template(initial_velocity_params: list[dict[str, Any]], dt: f
     return [ca, first, second]
 
 
+def _render_equation_blocks_panel(
+    dt: float,
+    initial_velocity_params: list[dict[str, Any]],
+    *,
+    blocks_key: str,
+    version_key: str,
+    widget_prefix: str,
+) -> None:
+    """Shared segment-block editor (templates + per-block params). Uses distinct session keys per tab."""
+    if blocks_key not in st.session_state:
+        st.session_state[blocks_key] = [_default_block("CV")]
+    if version_key not in st.session_state:
+        st.session_state[version_key] = 0
+
+    with st.container(border=True):
+        _section_intro("Trajectory creation lab", "Build an ordered list of motion segments or start from a template.")
+        templates = _equation_templates()
+        template_cols = st.columns([2.2, 1, 1, 2.2])
+        with template_cols[0]:
+            selected_template = st.selectbox(
+                "Predefined structure",
+                ["Custom", "Figure-8", "S-turn"] + list(templates.keys())[1:],
+                index=0,
+                key=f"{widget_prefix}_tpl_select",
+            )
+        if template_cols[1].button("Apply template", use_container_width=True, key=f"{widget_prefix}_tpl_apply"):
+            if selected_template == "Figure-8":
+                st.session_state[blocks_key] = _build_figure8_template(initial_velocity_params, dt)
+            elif selected_template == "S-turn":
+                st.session_state[blocks_key] = _build_s_shape_template(initial_velocity_params, dt)
+            else:
+                st.session_state[blocks_key] = [dict(item) for item in templates[selected_template]]
+            st.session_state[version_key] += 1
+            st.rerun()
+        if template_cols[2].button("Add block", use_container_width=True, key=f"{widget_prefix}_add_block"):
+            st.session_state[blocks_key].append(_default_block("CV"))
+        with template_cols[3]:
+            st.markdown(
+                "<div class='tg-inline-note'>Use the segment list below to mix CV, CA, CT, and SINGER motion patterns.</div>",
+                unsafe_allow_html=True,
+            )
+
+        blocks: list[dict[str, Any]] = st.session_state[blocks_key]
+        for idx, block in enumerate(blocks):
+            version = st.session_state[version_key]
+            with st.expander(f"Segment {idx + 1}: {block['model_type']}", expanded=True):
+                cols = st.columns([4, 2, 1, 1, 1])
+                with cols[0]:
+                    old_type = block["model_type"]
+                    new_type = st.selectbox(
+                        f"Type {idx + 1}",
+                        ["CV", "CA", "CT", "SINGER"],
+                        key=f"{widget_prefix}_type_{version}_{idx}",
+                        index=["CV", "CA", "CT", "SINGER"].index(block["model_type"]),
+                    )
+                    if new_type != old_type:
+                        st.session_state[blocks_key][idx] = _default_block(new_type)
+                        st.session_state[blocks_key][idx]["steps"] = block["steps"]
+                        st.rerun()
+                with cols[1]:
+                    block["steps"] = st.number_input(
+                        f"Steps {idx + 1}",
+                        min_value=2,
+                        value=int(block["steps"]),
+                        key=f"{widget_prefix}_steps_{version}_{idx}",
+                        help="Number of time steps generated for this segment before moving to the next block.",
+                    )
+                if cols[2].button("Up", key=f"{widget_prefix}_up_{idx}", use_container_width=True) and idx > 0:
+                    st.session_state[blocks_key][idx - 1], st.session_state[blocks_key][idx] = (
+                        st.session_state[blocks_key][idx],
+                        st.session_state[blocks_key][idx - 1],
+                    )
+                    st.rerun()
+                if (
+                    cols[3].button("Down", key=f"{widget_prefix}_down_{idx}", use_container_width=True)
+                    and idx < len(st.session_state[blocks_key]) - 1
+                ):
+                    st.session_state[blocks_key][idx + 1], st.session_state[blocks_key][idx] = (
+                        st.session_state[blocks_key][idx],
+                        st.session_state[blocks_key][idx + 1],
+                    )
+                    st.rerun()
+                if cols[4].button("Delete", key=f"{widget_prefix}_del_{idx}", use_container_width=True):
+                    st.session_state[blocks_key].pop(idx)
+                    st.rerun()
+
+                model_type = block["model_type"]
+                if model_type == "CV":
+                    param_cols = st.columns(2)
+                    with param_cols[0]:
+                        block["vel_change_std"] = _numeric_param_ui(
+                            "CV velocity-change std",
+                            _param_defaults(block.get("vel_change_std"), (0.1, 0.0, 0.5)),
+                            key_prefix=f"{widget_prefix}_cv_v_{version}_{idx}",
+                            help_text="Process noise for the CV.",
+                        )
+                elif model_type == "CA":
+                    param_cols = st.columns(2)
+                    with param_cols[0]:
+                        block["accel_noise_std"] = _numeric_param_ui(
+                            "CA acceleration-noise std",
+                            _param_defaults(block.get("accel_noise_std"), (0.1, 0.0, 0.5)),
+                            key_prefix=f"{widget_prefix}_ca_a_{version}_{idx}",
+                            help_text="Controls process noise applied to acceleration in CA segment.",
+                        )
+                elif model_type == "CT":
+                    param_cols = st.columns(2)
+                    with param_cols[0]:
+                        block["omega"] = _numeric_param_ui(
+                            "CT omega",
+                            _param_defaults(block.get("omega"), (1.2, -3.0, 3.0)),
+                            key_prefix=f"{widget_prefix}_ct_o_{version}_{idx}",
+                            help_text="Turn rate in radians/second for coordinated turn.",
+                        )
+                    with param_cols[1]:
+                        block["omega_noise_std"] = _numeric_param_ui(
+                            "CT omega-noise std",
+                            _param_defaults(block.get("omega_noise_std"), (0.0, 0.0, 0.5)),
+                            key_prefix=f"{widget_prefix}_ct_on_{version}_{idx}",
+                            help_text="Noise on turn rate per step.",
+                        )
+                elif model_type == "SINGER":
+                    param_cols = st.columns(2)
+                    with param_cols[0]:
+                        block["tau"] = _numeric_param_ui(
+                            "SINGER tau",
+                            _param_defaults(block.get("tau"), (1.0, 0.1, 5.0)),
+                            key_prefix=f"{widget_prefix}_sg_t_{version}_{idx}",
+                            help_text="Time constant of acceleration correlation.",
+                        )
+                    with param_cols[1]:
+                        block["sigma_a"] = _numeric_param_ui(
+                            "SINGER sigma_a",
+                            _param_defaults(block.get("sigma_a"), (0.5, 0.1, 2.0)),
+                            key_prefix=f"{widget_prefix}_sg_s_{version}_{idx}",
+                            help_text="Steady-state acceleration standard deviation.",
+                        )
+
+
 def equations_tab() -> None:
     _inject_ui_styles()
     st.subheader("Mathematical Equations")
@@ -448,129 +587,13 @@ def equations_tab() -> None:
                         )
                     )
 
-    if "eq_blocks" not in st.session_state:
-        st.session_state["eq_blocks"] = [_default_block("CV")]
-    if "eq_blocks_version" not in st.session_state:
-        st.session_state["eq_blocks_version"] = 0
-
-    with st.container(border=True):
-        _section_intro("Trajectory creation lab", "Build an ordered list of motion segments or start from a template.")
-        templates = _equation_templates()
-        template_cols = st.columns([2.2, 1, 1, 2.2])
-        with template_cols[0]:
-            selected_template = st.selectbox(
-                "Predefined structure",
-                ["Custom", "Figure-8", "S-turn"] + list(templates.keys())[1:],
-                index=0,
-            )
-        if template_cols[1].button("Apply template", use_container_width=True):
-            if selected_template == "Figure-8":
-                st.session_state["eq_blocks"] = _build_figure8_template(initial_velocity_params, dt)
-            elif selected_template == "S-turn":
-                st.session_state["eq_blocks"] = _build_s_shape_template(initial_velocity_params, dt)
-            else:
-                st.session_state["eq_blocks"] = [dict(item) for item in templates[selected_template]]
-            st.session_state["eq_blocks_version"] += 1
-            st.rerun()
-        if template_cols[2].button("Add block", use_container_width=True):
-            st.session_state["eq_blocks"].append(_default_block("CV"))
-        with template_cols[3]:
-            st.markdown(
-                "<div class='tg-inline-note'>Use the segment list below to mix CV, CA, CT, and SINGER motion patterns.</div>",
-                unsafe_allow_html=True,
-            )
-
-        for idx, block in enumerate(st.session_state["eq_blocks"]):
-            version = st.session_state["eq_blocks_version"]
-            with st.expander(f"Segment {idx + 1}: {block['model_type']}", expanded=True):
-                cols = st.columns([4, 2, 1, 1, 1])
-                with cols[0]:
-                    old_type = block["model_type"]
-                    new_type = st.selectbox(
-                        f"Type {idx + 1}",
-                        ["CV", "CA", "CT", "SINGER"],
-                        key=f"type_{version}_{idx}",
-                        index=["CV", "CA", "CT", "SINGER"].index(block["model_type"]),
-                    )
-                    if new_type != old_type:
-                        st.session_state["eq_blocks"][idx] = _default_block(new_type)
-                        st.session_state["eq_blocks"][idx]["steps"] = block["steps"]
-                        st.rerun()
-                with cols[1]:
-                    block["steps"] = st.number_input(
-                        f"Steps {idx + 1}",
-                        min_value=2,
-                        value=int(block["steps"]),
-                        key=f"steps_{version}_{idx}",
-                        help="Number of time steps generated for this segment before moving to the next block.",
-                    )
-                if cols[2].button("Up", key=f"up_{idx}", use_container_width=True) and idx > 0:
-                    st.session_state["eq_blocks"][idx - 1], st.session_state["eq_blocks"][idx] = (
-                        st.session_state["eq_blocks"][idx],
-                        st.session_state["eq_blocks"][idx - 1],
-                    )
-                    st.rerun()
-                if cols[3].button("Down", key=f"down_{idx}", use_container_width=True) and idx < len(st.session_state["eq_blocks"]) - 1:
-                    st.session_state["eq_blocks"][idx + 1], st.session_state["eq_blocks"][idx] = (
-                        st.session_state["eq_blocks"][idx],
-                        st.session_state["eq_blocks"][idx + 1],
-                    )
-                    st.rerun()
-                if cols[4].button("Delete", key=f"del_{idx}", use_container_width=True):
-                    st.session_state["eq_blocks"].pop(idx)
-                    st.rerun()
-
-                model_type = block["model_type"]
-                if model_type == "CV":
-                    param_cols = st.columns(2)
-                    with param_cols[0]:
-                        block["vel_change_std"] = _numeric_param_ui(
-                            "CV velocity-change std",
-                            _param_defaults(block.get("vel_change_std"), (0.1, 0.0, 0.5)),
-                            key_prefix=f"cv_v_{version}_{idx}",
-                            help_text="Process noise for the CV.",
-                        )
-                elif model_type == "CA":
-                    param_cols = st.columns(2)
-                    with param_cols[0]:
-                        block["accel_noise_std"] = _numeric_param_ui(
-                            "CA acceleration-noise std",
-                            _param_defaults(block.get("accel_noise_std"), (0.1, 0.0, 0.5)),
-                            key_prefix=f"ca_a_{version}_{idx}",
-                            help_text="Controls process noise applied to acceleration in CA segment.",
-                        )
-                elif model_type == "CT":
-                    param_cols = st.columns(2)
-                    with param_cols[0]:
-                        block["omega"] = _numeric_param_ui(
-                            "CT omega",
-                            _param_defaults(block.get("omega"), (1.2, -3.0, 3.0)),
-                            key_prefix=f"ct_o_{version}_{idx}",
-                            help_text="Turn rate in radians/second for coordinated turn.",
-                        )
-                    with param_cols[1]:
-                        block["omega_noise_std"] = _numeric_param_ui(
-                            "CT omega-noise std",
-                            _param_defaults(block.get("omega_noise_std"), (0.0, 0.0, 0.5)),
-                            key_prefix=f"ct_on_{version}_{idx}",
-                            help_text="Noise on turn rate per step.",
-                        )
-                elif model_type == "SINGER":
-                    param_cols = st.columns(2)
-                    with param_cols[0]:
-                        block["tau"] = _numeric_param_ui(
-                            "SINGER tau",
-                            _param_defaults(block.get("tau"), (1.0, 0.1, 5.0)),
-                            key_prefix=f"sg_t_{version}_{idx}",
-                            help_text="Time constant of acceleration correlation.",
-                        )
-                    with param_cols[1]:
-                        block["sigma_a"] = _numeric_param_ui(
-                            "SINGER sigma_a",
-                            _param_defaults(block.get("sigma_a"), (0.5, 0.1, 2.0)),
-                            key_prefix=f"sg_s_{version}_{idx}",
-                            help_text="Steady-state acceleration standard deviation.",
-                        )
+    _render_equation_blocks_panel(
+        dt,
+        initial_velocity_params,
+        blocks_key="eq_blocks",
+        version_key="eq_blocks_version",
+        widget_prefix="eq",
+    )
 
     has_ca_block = any(b["model_type"] == "CA" for b in st.session_state["eq_blocks"])
     initial_acceleration = None
@@ -611,6 +634,285 @@ def equations_tab() -> None:
 
     if "equations_job_id" in st.session_state:
         _render_job_monitor(st.session_state["equations_job_id"], keep_last=10)
+
+
+def equations_px4_mission_tab() -> None:
+    """Build equation segment blocks, generate a clean trajectory, upload as a PX4 mission, and log flight."""
+    _inject_ui_styles()
+    st.subheader("Equations → PX4")
+    st.caption(
+        "Design a trajectory with motion blocks, upload it as a MAVLink mission, and let PX4 fly it "
+        "autonomously at any sim speed. The output 'clean' is what the vehicle actually flew; "
+        "the initial climb to the configured altitude is included and can be trimmed in post-processing."
+    )
+
+    v_defaults = DEFAULTS.equations_initial_velocity_3d
+    a_defaults = DEFAULTS.equations_initial_acceleration_3d
+    axis_names = ["vx", "vy", "vz"]
+
+    # ── Run setup ─────────────────────────────────────────────────────────────
+    with st.container(border=True):
+        _section_intro("Run setup", "Output, batch size, and simulator connection.")
+        row = st.columns([2.4, 1, 2])
+        with row[0]:
+            output_dir = st.text_input("Output directory", value=default_output_dir(), key="eqpx4_output_dir")
+        with row[1]:
+            num_trajectories = st.number_input(
+                "Trajectories", min_value=1, value=DEFAULTS.px4_num_trajectories, key="eqpx4_n"
+            )
+        with row[2]:
+            connection_uri = st.text_input(
+                "PX4 connection URI", value=DEFAULTS.px4_connection_uri, key="eqpx4_uri"
+            )
+
+    # ── Trajectory settings ───────────────────────────────────────────────────
+    with st.container(border=True):
+        _section_intro(
+            "Trajectory",
+            "The path length is determined by the block steps × dt. "
+            "Enable randomisation to sample a random assortment of blocks up to a target step count.",
+        )
+        traj_cols = st.columns([1, 1, 1])
+        with traj_cols[0]:
+            em_dt = st.number_input(
+                "dt [s]",
+                min_value=0.0001,
+                value=DEFAULTS.equations_dt,
+                key="eqpx4_em_dt",
+                help="Time step for the equation path. Each step becomes a potential mission waypoint.",
+            )
+        with traj_cols[1]:
+            randomize = st.toggle(
+                "Randomize blocks",
+                value=False,
+                key="eqpx4_rand",
+                help="Draw a random assortment from the block palette rather than using the fixed order.",
+            )
+        with traj_cols[2]:
+            seed = st.number_input("Seed (blank = random)", min_value=0, value=0, key="eqpx4_seed")
+            seed_val: int | None = int(seed) if seed else None
+
+        if randomize:
+            rand_cols = st.columns(3)
+            with rand_cols[0]:
+                em_min_seg = st.number_input("Min segment steps", min_value=2, value=20, key="eqpx4_min_seg")
+            with rand_cols[1]:
+                em_max_seg = st.number_input("Max segment steps", min_value=2, value=60, key="eqpx4_max_seg")
+            with rand_cols[2]:
+                target_total_steps = st.number_input(
+                    "Target total steps",
+                    min_value=10,
+                    value=400,
+                    key="eqpx4_tgt_steps",
+                    help="Blocks are drawn until the total step count reaches this value.",
+                )
+        else:
+            em_min_seg, em_max_seg, target_total_steps = 20, 60, None
+
+    # ── Initial velocity ──────────────────────────────────────────────────────
+    with st.container(border=True):
+        _section_intro(
+            "Initial velocity (3D)",
+            "Starting velocity for the equations path. "
+            "Use a range to vary it across trajectories in a batch.",
+        )
+        vel_cols = st.columns(3)
+        initial_velocity_params: list[dict[str, Any]] = []
+        for i, axis_name in enumerate(axis_names):
+            with vel_cols[i]:
+                initial_velocity_params.append(
+                    _numeric_param_ui(
+                        axis_name,
+                        (float(v_defaults[i]), float(v_defaults[i]) * 0.5, float(v_defaults[i]) * 1.5),
+                        key_prefix=f"eqpx4_init_v_{axis_name}",
+                        help_text=f"Initial {axis_name} applied to the equations generator.",
+                    )
+                )
+
+    # ── Block palette ─────────────────────────────────────────────────────────
+    sync_cols = st.columns([1, 3])
+    with sync_cols[0]:
+        if st.button("Copy blocks from Equations tab", key="eqpx4_sync_eq"):
+            src = st.session_state.get("eq_blocks")
+            if src:
+                st.session_state["eq_mission_blocks"] = [dict(b) for b in src]
+                st.session_state["eq_mission_blocks_version"] = (
+                    st.session_state.get("eq_mission_blocks_version", 0) + 1
+                )
+                st.success("Blocks copied.")
+                st.rerun()
+            else:
+                st.warning("Equations tab has no blocks yet.")
+    with sync_cols[1]:
+        st.markdown(
+            "<div class='tg-inline-note'>Block state is independent from the Equations tab.</div>",
+            unsafe_allow_html=True,
+        )
+
+    _render_equation_blocks_panel(
+        float(em_dt),
+        initial_velocity_params,
+        blocks_key="eq_mission_blocks",
+        version_key="eq_mission_blocks_version",
+        widget_prefix="eqpx4",
+    )
+
+    blocks = st.session_state.get("eq_mission_blocks") or []
+
+    # ── Initial acceleration (only when a CA block exists) ────────────────────
+    has_ca_block = any(b.get("model_type") == "CA" for b in blocks)
+    initial_acceleration: list[float] | None = None
+    if has_ca_block:
+        with st.container(border=True):
+            _section_intro("Initial acceleration (3D)", "Required because at least one CA segment is present.")
+            a_cols = st.columns(3)
+            initial_acceleration = [
+                float(
+                    a_cols[i].number_input(
+                        f"a{i} ({axis_names[i]})", value=float(a_defaults[i]), key=f"eqpx4_a_{i}"
+                    )
+                )
+                for i in range(3)
+            ]
+
+    # ── Advanced settings (collapsed by default) ──────────────────────────────
+    with st.expander("PX4 & mission settings", expanded=False):
+
+        st.markdown("**Telemetry noise** — applied to PX4 flight logs, not to the equations path.")
+        observation_noise = _numeric_param_ui(
+            "Observation noise (PX4 telemetry)",
+            (
+                DEFAULTS.px4_observation_noise,
+                DEFAULTS.px4_observation_noise_min,
+                DEFAULTS.px4_observation_noise_max,
+            ),
+            key_prefix="eqpx4_obs",
+            help_text="Gaussian noise added to x/y/z in the 'noisy' telemetry log.",
+        )
+
+        st.divider()
+        st.markdown(
+            "**Flight dynamics** — set or randomise PX4 MPC controller parameters before each flight. "
+            "Use *range* mode on any parameter to sample a fresh value per trajectory, "
+            "or *fixed* to apply an exact value every time."
+        )
+        randomize_dynamics = st.toggle(
+            "Apply PX4 flight dynamics",
+            value=False,
+            key="eqpx4_rand_dyn",
+            help=(
+                "When on, the five MPC parameters below are written to PX4 before each flight. "
+                "Leave off to fly with PX4 defaults."
+            ),
+        )
+        _MPC_ITEMS = [
+            ("mpc_acc_hor_max", "MPC_ACC_HOR_MAX [m/s²]", (12.5, 5.0, 20.0), "eqpx4_mpc_acc",
+             "Maximum horizontal acceleration. Range 5–20 m/s²."),
+            ("mpc_jerk_max",    "MPC_JERK_MAX [m/s³]",   (20.0, 5.0, 35.0), "eqpx4_mpc_jrk",
+             "Maximum jerk limit. Range 5–35 m/s³."),
+            ("mpc_xy_p",        "MPC_XY_P",               (1.5, 1.0, 2.0),   "eqpx4_mpc_xyp",
+             "Position loop P-gain for XY axes. Range 1–2."),
+            ("mpc_tiltmax_air", "MPC_TILTMAX_AIR [°]",   (62.5, 45.0, 80.0), "eqpx4_mpc_tlt",
+             "Maximum tilt angle in air. Range 45–80 °."),
+            ("mpc_xy_vel_p_acc","MPC_XY_VEL_P_ACC",      (2.65, 1.8, 3.5),  "eqpx4_mpc_vel",
+             "Velocity loop P-gain (accel feed-forward). Range 1.8–3.5."),
+        ]
+        dynamics_params: dict[str, Any] = {}
+        if randomize_dynamics:
+            dyn_cols = st.columns(3)
+            for idx, (field, label, defs, key_pfx, help_txt) in enumerate(_MPC_ITEMS):
+                with dyn_cols[idx % 3]:
+                    dynamics_params[field] = _numeric_param_ui(label, defs, key_pfx, help_txt)
+        else:
+            # Send schema defaults (fixed mode) — ignored by backend when toggle is off.
+            for field, _label, (val, lo, hi), _key, _help in _MPC_ITEMS:
+                dynamics_params[field] = {"mode": "range", "value": val, "min_value": lo, "max_value": hi}
+
+        st.divider()
+        st.markdown(
+            "**Mission upload** — controls waypoint thinning and how PX4 flies the path. "
+            "The initial climb from ground to *min altitude* is included in the logged data; "
+        )
+        adv_cols = st.columns(3)
+        with adv_cols[0]:
+            mission_min_step_m = st.number_input(
+                "Min waypoint spacing [m]",
+                min_value=0.05, value=0.5, key="eqpx4_min_step",
+                help=(
+                    "Adjacent waypoints closer than this are merged before upload. "
+                    "Increase to reduce the number of uploaded waypoints."
+                ),
+            )
+        with adv_cols[1]:
+            waypoint_acceptance_radius_m = st.number_input(
+                "Acceptance radius [m]",
+                min_value=0.1, value=2.0, key="eqpx4_accept_r",
+                help="PX4 marks a waypoint as reached when the drone is within this radius.",
+            )
+        with adv_cols[2]:
+            min_altitude_m = st.number_input(
+                "Min altitude [m AGL]",
+                min_value=1.0, value=10.0, key="eqpx4_min_alt",
+                help=(
+                    "The whole path is shifted upward so its lowest point is at least "
+                    "this many metres above the home/arm position."
+                ),
+            )
+        # mission_max_waypoints is set permanently to the schema maximum (900).
+        # Users should control density via min_waypoint_spacing instead.
+        mission_max_waypoints = 900
+
+    # ── Run ───────────────────────────────────────────────────────────────────
+    if st.button("Generate & fly on PX4", type="primary", key="eqpx4_run"):
+        st.session_state.pop("eq_px4_mission_job_id", None)
+        if not blocks:
+            st.error("Add at least one segment block.")
+            return
+        if randomize and not target_total_steps:
+            st.error("Target total steps is required when randomisation is enabled.")
+            return
+        # duration_s is computed from trajectory length (steps × dt) in the generator;
+        # we pass a placeholder here — the generator overwrites it with the actual value.
+        computed_duration_s = (
+            float(target_total_steps) * float(em_dt) if randomize
+            else sum(b.get("steps", 0) for b in blocks) * float(em_dt)
+        )
+        equations_mission_payload: dict[str, Any] = {
+            "dt": float(em_dt),
+            "dim": 3,
+            "seed": seed_val,
+            "randomize_from_current_blocks": randomize,
+            "min_segment_length": int(em_min_seg),
+            "max_segment_length": int(em_max_seg),
+            "target_total_steps": int(target_total_steps) if target_total_steps is not None else None,
+            "blocks": [dict(b) for b in blocks],
+            "initial_velocity_params": initial_velocity_params,
+            "initial_acceleration": initial_acceleration,
+            "mission_max_waypoints": int(mission_max_waypoints),
+            "mission_min_step_m": float(mission_min_step_m),
+            "waypoint_acceptance_radius_m": float(waypoint_acceptance_radius_m),
+            "min_altitude_m": float(min_altitude_m),
+            "randomize_flight_dynamics": bool(randomize_dynamics),
+            **dynamics_params,
+        }
+        body: dict[str, Any] = {
+            "output_dir": output_dir,
+            "num_trajectories": int(num_trajectories),
+            "duration_s": max(computed_duration_s, 1.0),
+            "dt_s": float(em_dt),
+            "observation_noise": observation_noise,
+            "connection_uri": connection_uri,
+            "profile_name": "equations_mission",
+            "motion": None,
+            "equations_mission": equations_mission_payload,
+        }
+        job_id = _start_px4_job(body)
+        if job_id is None:
+            return
+        st.session_state["eq_px4_mission_job_id"] = job_id
+
+    if "eq_px4_mission_job_id" in st.session_state:
+        _render_job_monitor(st.session_state["eq_px4_mission_job_id"], keep_last=10)
 
 
 def px4_tab() -> None:
@@ -701,73 +1003,283 @@ def px4_tab() -> None:
 
 def output_format_tab() -> None:
     _inject_ui_styles()
-    st.subheader("Output Format")
-    st.caption("Reference for the JSONL files written by the equations and PX4 generators.")
+    st.subheader("Usage Guide")
+    st.caption(
+        "How each generator works, when to use it, and the format of the output files."
+    )
 
+    # ── Overview ──────────────────────────────────────────────────────────────
     with st.container(border=True):
-        _section_intro("File structure", "Each output file is newline-delimited JSON, with one trajectory record per line.")
+        _section_intro("Overview", "Three engines, two philosophies.")
         st.markdown(
             """
-            - Output files are written as `.jsonl`.
-            - Each line is a complete JSON object for one generated trajectory.
-            - The filename includes a timestamp and a few key hyperparameters.
+            This tool provides three trajectory generation engines.  Two of them
+            (**Equations** and **PX4**) are independent; the third (**Eq → PX4**) is a
+            pipeline that feeds the output of the equations engine into PX4 as a
+            pre-planned mission.
+
+            The choice of engine depends on your goal:
+
+            | Engine | Physics source | Timing control | Speed factor | Recommended for |
+            |---|---|---|---|---|
+            | Equations | Mathematical models | Instant (no simulation) | N/A | Large dataset generation, filter prototyping |
+            | PX4 | Real PX4 flight stack | Python loop (`asyncio.sleep`) | Works reliably up to ~3–5× | Realistic PX4 dynamics, one-off runs |
+            | Eq → PX4 | Real PX4 flight stack | PX4 drives itself (mission mode) | Any speed factor | Large-scale PX4 datasets with diverse shapes |
             """
         )
 
-    cols = st.columns(2)
-
-    with cols[0]:
-        with st.container(border=True):
-            _section_intro("Equations records", "Mathematical trajectories store clean and noisy sequences together with the sampled configuration.")
-            st.code(
-                """{
-  "id": 0,
-  "type": "equations",
-  "trajectory_config": {
-    "dt": 0.04,
-    "dim": 3,
-    "observation_noise_std": 0.1,
-    "segments": [...]
-  },
-  "noisy": [[x, y, z], ...],
-  "clean": [[x, y, z], ...]
-}""",
-                language="json",
-            )
-
-    with cols[1]:
-        with st.container(border=True):
-            _section_intro("PX4 records", "PX4 trajectories store commanded setpoints together with normalized clean/noisy flight logs.")
-            st.code(
-                """{
-  "id": 0,
-  "type": "px4",
-  "trajectory_config": {
-    "dt": 0.1,
-    "observation_noise_std": 0.1,
-    "metadata": {
-      "duration_s": 20.0,
-      "profile_name": "default",
-      "motion": {...}
-    }
-  },
-  "setpoints": [{"t": 0.0, "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0}, ...],
-  "clean": [{"t": 0.0, "x": 0.0, "y": 0.0, "z": 0.0, "vx": 0.0, "vy": 0.0, "vz": 0.0}, ...],
-  "noisy": [{"t": 0.0, "x": 0.1, "y": -0.1, "z": 0.0, "vx": 0.0, "vy": 0.0, "vz": 0.0}, ...]
-}""",
-                language="json",
-            )
-
+    # ── Equations engine ──────────────────────────────────────────────────────
     with st.container(border=True):
-        _section_intro("Coordinate conventions", "How to interpret the stored values.")
+        _section_intro(
+            "Equations engine",
+            "Pure mathematics, no simulator required.",
+        )
         st.markdown(
             """
-            - PX4 trajectories are always 3D and use NED-style position fields: `x`, `y`, and `z`.
-            - `setpoints` are commanded reference states sent to PX4.
-            - `clean` is the logged vehicle state returned by telemetry.
-            - `noisy` is the clean position with added Gaussian observation noise.
-            - Common fields stay under `trajectory_config`, while PX4-specific details live under `trajectory_config.metadata`.
-            - Equation trajectories are 2D or 3D depending on the selected `dim`.
+            The equations engine generates trajectories by numerically integrating
+            stochastic differential equations.  No PX4, no Gazebo, and no network
+            connection are involved — a batch of thousands of trajectories can be
+            created in seconds.
+
+            #### Motion models
+
+            Each trajectory is built from one or more sequential **segments**, each
+            governed by one of four motion models:
+
+            - **CV — Constant Velocity.**  The target moves at a fixed velocity.
+              Small random perturbations (process noise) are applied each step, so the
+              path is smooth but gently curved rather than perfectly straight.
+            - **CA — Constant Acceleration.**  The target accelerates at a roughly
+              constant rate.  Process noise causes the acceleration to drift slowly
+              over time.  Produces arcing, banana-shaped segments.
+            - **CT — Coordinated Turn.**  The target moves at constant speed through a
+              banked turn at a fixed turn rate (omega).  Process noise on the turn rate
+              makes the curve slightly irregular.  Good for modelling aircraft-style
+              manoeuvres.
+            - **SINGER — Singer model.**  Models acceleration as a first-order
+              Markov process with a user-specified time constant (tau) and variance
+              (sigma_a).  The trajectory is smooth yet highly manoeuvrable, making it
+              the most realistic model for agile targets.
+
+            #### Segment blocks and randomisation
+
+            Segments are configured as a list of **blocks**.  Each block specifies the
+            motion model, the number of time steps, and model-specific parameters such
+            as noise standard deviations or turn rates.
+
+            When **Randomize from current blocks** is enabled, the generator treats the
+            block list as a *palette* rather than a fixed plan.  For each trajectory it
+            draws a random number of blocks, picks each one from the palette uniformly
+            at random, and assigns it a random length sampled between *min segment
+            length* and *max segment length*.  The draw continues until the total step
+            count reaches or exceeds *target total steps*.  This produces a large
+            variety of trajectory shapes from a compact configuration.
+
+            #### Observation noise
+
+            After the clean trajectory is integrated, independent zero-mean Gaussian
+            noise with the configured standard deviation is added to each position
+            axis at every time step.  The result is the **noisy** sequence, which
+            simulates realistic sensor measurements.  The **clean** sequence is the
+            noiseless ground truth.
+
+            #### Dimensionality
+
+            The generator supports **2D** (x, y) and **3D** (x, y, z).  In 2D mode
+            the z axis is omitted entirely.  In 3D mode all four motion models operate
+            independently on each axis, except CT which couples x and y through the
+            turn rate while treating z as a separate CV/CA process.
+            """
+        )
+
+    # ── PX4 engine ────────────────────────────────────────────────────────────
+    with st.container(border=True):
+        _section_intro(
+            "PX4 engine",
+            "Realistic drone dynamics powered by the PX4 flight stack.",
+        )
+        st.markdown(
+            """
+            The PX4 engine connects to a running PX4 SITL (Software-In-The-Loop)
+            simulator via MAVSDK and flies the drone in **offboard mode**.  In offboard
+            mode Python acts as the high-rate external controller: it sends a new
+            position + velocity setpoint to PX4 at every time step and PX4's internal
+            control loops (position controller → velocity controller → attitude
+            controller → motor mixer) handle the actual stabilisation.
+
+            #### Execution sequence
+
+            1. Wait for PX4 health checks (GPS fix, estimator convergence).
+            2. Arm the drone and command a takeoff to a safe initial altitude.
+            3. Capture the current NED position as the trajectory origin.
+            4. Enter offboard mode and begin streaming setpoints from the pre-generated
+               path one step at a time.
+            5. After each setpoint is sent, one telemetry sample is read back and
+               stored as the **clean** log entry.
+            6. Land and disarm.
+
+            #### Timing and speed factor
+
+            The step interval is `dt / PX4_SIM_SPEED_FACTOR`.  The code uses an
+            accumulating wall-clock timer so that loop overhead is compensated across
+            steps rather than added to each sleep.  At speed factors up to roughly 3–5×
+            this works well.  At higher speed factors the required sleep interval falls
+            below Python's scheduler resolution (~10 ms on most systems), and the drone
+            effectively receives all setpoints in rapid succession rather than spaced
+            over the correct simulated time — trajectory quality degrades significantly.
+            For high speed factors, use the **Eq → PX4** engine instead.
+
+            #### Built-in trajectory profiles
+
+            - **Default.**  Random waypoints are generated inside a configurable 3D
+              box.  The drone visits them in order using smooth jerk-limited motion
+              whose speed and acceleration limits you control.  The number of waypoints
+              and their spread can be fixed or drawn from a range, making each
+              trajectory unique.
+            - **Figure-8.**  A deterministic figure-of-eight path in the horizontal
+              plane at a fixed altitude.  Useful for repeatable benchmarking.
+            - **S-turn.**  A sinusoidal lateral sweep combined with a gradual climb,
+              simulating a search pattern.
+
+            #### What the clean log contains
+
+            Because PX4's controllers never track setpoints perfectly — there is
+            always lag, overshoot, and vibration — the **clean** and **setpoints**
+            sequences are genuinely different.  The clean log is the *actual* vehicle
+            state reported by the on-board estimator, making it realistic flight data
+            rather than an idealized reference.
+            """
+        )
+
+    # ── Eq → PX4 engine ───────────────────────────────────────────────────────
+    with st.container(border=True):
+        _section_intro(
+            "Eq → PX4 engine",
+            "Equations-generated shapes flown by PX4 in mission mode — works at any sim speed.",
+        )
+        st.markdown(
+            """
+            This engine is a two-stage pipeline that combines the diversity of the
+            equations generator with the physical realism of the PX4 flight stack,
+            while avoiding the Python timing limitations of offboard mode.
+
+            #### Stage 1 — trajectory generation (equations)
+
+            A full position-over-time trajectory is generated offline using the same
+            block-based equations engine described above.  All blocks, randomisation,
+            and motion models are available.  The generator always runs in 3D (z is
+            the NED down axis) and the entire path is available in memory before any
+            flight begins.
+
+            The path is then post-processed in two ways:
+            - **Altitude normalisation.**  Equation paths start at z = 0 (ground
+              level in NED).  The entire path is shifted upward so that the lowest
+              point sits at least *min altitude* metres above the home/arm position.
+              This prevents PX4 from receiving waypoints below ground.
+            - **Waypoint thinning.**  Dense equation paths (one point per dt) may
+              contain thousands of positions.  Consecutive waypoints closer than *min
+              step* metres are merged, and the result is capped at *max waypoints*.
+              This produces a compact mission that still faithfully represents the
+              original path shape.
+
+            #### Stage 2 — mission upload and flight (PX4)
+
+            The thinned waypoints are converted to global coordinates (lat/lon +
+            altitude relative to home) and uploaded to PX4 as a **MAVLink mission**
+            before the drone arms.  The execution sequence is:
+
+            1. Upload the complete mission.  Wait 1–2 seconds for PX4's navigator to
+               validate it.
+            2. Arm.
+            3. Call `start_mission()`.  PX4 then handles everything autonomously:
+               takeoff to the first waypoint altitude, waypoint following.
+               **Python does not send any setpoints during the flight.**
+            4. Telemetry logging begins immediately at mission start — **including the
+               initial climb from the ground to `min altitude` metres.**
+            5. Mission completion is detected by watching PX4's flight mode: when it
+               transitions from MISSION → HOLD, logging stops.
+
+            #### Initial climb and post-processing trim
+
+            The initial climb from ground to `min altitude` (which you configure in the
+            UI) is intentionally included in the `clean` and `noisy` logs.  The climb
+            height is stored in `trajectory_config.metadata.min_altitude_m`.
+
+            To isolate only the waypoint-following phase in post-processing:
+
+            ```python
+            min_alt = record["trajectory_config"]["metadata"]["min_altitude_m"]
+            clean = [s for s in record["clean"] if s["z"] >= min_alt]
+            ```
+
+            This gives you a clean start from the first equation waypoint with no
+            need for any on-the-fly detection logic.
+
+            #### Why this works at any speed factor
+
+            Because all waypoints are on the vehicle before takeoff, PX4's navigator
+            drives the timing entirely.  There is no Python sleep loop that needs to
+            match simulated time.  Whether `PX4_SIM_SPEED_FACTOR` is 1× or 20×,
+            Python is only polling for completion and streaming telemetry — both of
+            which have large tolerance for timing jitter.
+
+            #### Setpoints vs. clean in this mode
+
+            - **Setpoints** are the thinned mission waypoints (the uploaded path shape).
+              They are sparse by design.
+            - **Clean** is the continuous telemetry logged at the observation rate
+              while PX4 flies between those waypoints.  PX4's mission executor
+              generates smooth, jerk-limited paths between waypoints, so the clean
+              trajectory is denser and smoother than the setpoints, and reflects real
+              flight dynamics rather than the exact equation path.  This is intentional:
+              the equations define the *shape* of the flight; PX4 determines the
+              *dynamics*.
+            """
+        )
+
+    # ── Output format ─────────────────────────────────────────────────────────
+    with st.container(border=True):
+        _section_intro(
+            "Output format",
+            "All generators write newline-delimited JSON (.jsonl) — one trajectory object per line.",
+        )
+        st.markdown(
+            """
+            #### Filename convention
+
+            Files are named `{engine}_{timestamp}_count-{n}_dt-{dt}_duration-{d}.jsonl`.
+            The timestamp is local wall time at job start.
+
+            #### Common fields (all engines)
+
+            | Field | Description |
+            |---|---|
+            | `id` | Zero-based index of this trajectory within the file. |
+            | `type` | `"equations"` or `"px4"`. |
+            | `trajectory_config` | Hyperparameters used to generate this trajectory. |
+            | `clean` | Ground-truth positions (equations) or vehicle telemetry (PX4). |
+            | `noisy` | `clean` positions with independent per-axis Gaussian noise added. |
+
+            #### Equations-specific fields
+
+            `clean` and `noisy` are arrays of position vectors `[x, y]` (2D) or
+            `[x, y, z]` (3D), one per time step.  There are no velocity fields because
+            velocity can be estimated by finite difference if needed.
+
+            #### PX4-specific fields
+
+            `setpoints` is an array of commanded reference states, each containing
+            `{t, x, y, z, yaw}`.  Both `clean` and `noisy` are arrays of logged vehicle
+            states containing `{t, x, y, z, vx, vy, vz}`.  Positions are in the NED
+            frame relative to the home/arm position; velocities are NED body-frame from
+            the on-board estimator.
+
+            #### Coordinate conventions
+
+            All PX4 outputs use **NED** (North-East-Down): `x` is north, `y` is east,
+            `z` is down (so negative `z` means above ground).  Yaw is measured in
+            degrees, increasing clockwise from north.  Equations-only outputs use
+            abstract Cartesian coordinates with no physical orientation assumed.
             """
         )
 
@@ -775,9 +1287,13 @@ def output_format_tab() -> None:
 def main() -> None:
     st.set_page_config(page_title="Trajectory Generator Lab", layout="wide")
     st.title("Trajectory Generator Lab")
-    tab_eq, tab_px4, tab_output = st.tabs(["Equations", "PX4", "Output Format"])
+    tab_eq, tab_eq_px4, tab_px4, tab_output = st.tabs(
+        ["Equations", "Eq → PX4", "PX4", "Usage"]
+    )
     with tab_eq:
         equations_tab()
+    with tab_eq_px4:
+        equations_px4_mission_tab()
     with tab_px4:
         px4_tab()
     with tab_output:
