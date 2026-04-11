@@ -7,14 +7,14 @@ Interactive Streamlit app for generating trajectory datasets from:
 
 The app writes output as newline-delimited JSON (`.jsonl`) so each generated trajectory is stored as one JSON object per line.
 
-## What The App Includes
+## Overview
 
 - `Equations` tab for synthetic trajectory generation from motion equations
 - `PX4` tab for PX4-based trajectory execution and logging
 - `Output Format` tab that explains the generated JSON structure
 - Plot previews for recent trajectories directly in the UI
 
-## How To Run
+## Installation And Launch
 
 From the repository root:
 
@@ -48,6 +48,8 @@ Streamlit usually opens the app automatically in your browser. If it does not, l
 ```text
 http://localhost:8501
 ```
+
+## Application Sections
 
 ### Equations Tab
 
