@@ -11,11 +11,9 @@ import streamlit as st
 
 from app.config.defaults import DEFAULTS, default_output_dir
 from app.config.logging_config import setup_logging
-from app.generators.equations_generator import EquationTrajectoryGenerator
-from app.generators.px4_generator import PX4TrajectoryGenerator
-from app.models.schemas import EquationsRequest, JobStatus, Px4Request
+from app.models.schemas import JobStatus
 from app.services.job_service import job_service
-from app.writers.file_writer import FileWriter
+from generate import generate_equations, generate_px4
 
 setup_logging()
 LOGGER = logging.getLogger(__name__)
@@ -106,45 +104,35 @@ def _param_defaults(param: dict[str, Any] | None, fallback: tuple[float, float, 
 
 def _start_equations_job(payload: dict[str, Any]) -> str | None:
     LOGGER.info("Equations generate clicked")
-    try:
-        params = EquationsRequest.model_validate(payload)
-    except Exception as exc:
-        LOGGER.exception("Equations validation error: %s", exc)
-        st.error(f"Invalid equations request: {exc}")
-        return None
-
     record = job_service.create_job("equations")
-    writer = FileWriter(
-        output_dir=params.output_dir,
-        trajectory_type="equations",
-        important_hparams={"dt": params.dt, "dim": params.dim, "count": params.num_trajectories},
-    )
-    record.output_path = writer.output_path
-    generator = EquationTrajectoryGenerator(job_id=record.job_id, params=params, writer=writer)
-    Thread(target=generator.run, daemon=True).start()
-    LOGGER.info("Equations job started job_id=%s output=%s", record.job_id, record.output_path)
+    try:
+        Thread(
+            target=generate_equations,
+            kwargs={**payload, "_job_id": record.job_id},
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        LOGGER.exception("Equations start error: %s", exc)
+        st.error(f"Failed to start equations job: {exc}")
+        return None
+    LOGGER.info("Equations job started job_id=%s", record.job_id)
     return record.job_id
 
 
 def _start_px4_job(payload: dict[str, Any]) -> str | None:
     LOGGER.info("PX4 generate clicked")
-    try:
-        params = Px4Request.model_validate(payload)
-    except Exception as exc:
-        LOGGER.exception("PX4 validation error: %s", exc)
-        st.error(f"Invalid PX4 request: {exc}")
-        return None
-
     record = job_service.create_job("px4")
-    writer = FileWriter(
-        output_dir=params.output_dir,
-        trajectory_type="px4",
-        important_hparams={"dt": params.dt_s, "duration": params.duration_s, "count": params.num_trajectories},
-    )
-    record.output_path = writer.output_path
-    generator = PX4TrajectoryGenerator(job_id=record.job_id, params=params, writer=writer)
-    Thread(target=generator.run, daemon=True).start()
-    LOGGER.info("PX4 job started job_id=%s output=%s", record.job_id, record.output_path)
+    try:
+        Thread(
+            target=generate_px4,
+            kwargs={**payload, "_job_id": record.job_id},
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        LOGGER.exception("PX4 start error: %s", exc)
+        st.error(f"Failed to start PX4 job: {exc}")
+        return None
+    LOGGER.info("PX4 job started job_id=%s", record.job_id)
     return record.job_id
 
 
