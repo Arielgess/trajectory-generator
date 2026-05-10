@@ -1,6 +1,13 @@
 # Trajectory Generator
 
-A Python library for generating trajectories from kinematic motion models and PX4 autopilot simulations.
+This framework is engineered to solve the data scarcity problem in UAV tracking and state estimation research. By bridging the gap between simplified kinematic equations and high-fidelity PX4 flight dynamics, it provides a scalable source of physically plausible synthetic datasets.
+
+### Key Features:
+* Research-Ready Output: Generates paired clean/noisy state sequences optimized for benchmarking architectures like Mamba (SSMs) against traditional Bayesian filters (IMM/EKF).
+
+* Dual-Pipeline Generation: Supports both rapid pure-Python simulations and high-fidelity PX4 SITL integration.
+
+* Agentic-Ready Interface: Designed for seamless integration with LLM harnesses and automated research pipelines, featuring fully documented API functions and structured configuration schema.
 
 The generator produces pairs of clean and noisy state sequences that can be used as training data for tracking, prediction, and state-estimation models.  Output is written as newline-delimited JSON (`.jsonl`), one trajectory object per line.
 
